@@ -58,5 +58,5 @@ mod test_support;
 
 // Compile the README examples as part of the documentation checks.
 #[cfg(doctest)]
-#[doc = include_str!("../README.markdown")]
+#[doc = include_str!("../README.md")]
 mod readme {}

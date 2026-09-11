@@ -5,8 +5,6 @@ edition = "2024"
 rust-version = "1.88"
 description = "Rust-native RTL-SDR driver built on nusb."
 license = "Apache-2.0"
-# A non-default Markdown name avoids manual_readme warnings in normalized packages.
-readme = "README.markdown"
 repository = "https://github.com/bastibl/rtlsdr-nusb"
 documentation = "https://docs.rs/rtlsdr-nusb"
 keywords = ["rtlsdr", "sdr", "usb", "radio", "nusb"]

@@ -17,8 +17,7 @@ close/shutdown and sync/async APIs follow
   VID/PID matching through the builder.
 
 The current range is 900,001–3,200,000 complex samples/s. Rates above 2.4 MS/s
-may drop samples. Positive ppm correction raises the minimum accepted rate
-slightly (to 900,440 samples/s at +488 ppm). Tuner operation starts at 28.8 MHz; lower frequencies require
+may drop samples. Tuner operation starts at 28.8 MHz; lower frequencies require
 Blog V4 or a suitable direct-sampling input. The nominal upper limit is
 1.766 GHz, subject to the individual tuner's PLL locking. Manual gain is an
 approximation based on the reference driver's LNA/mixer steps, not librtlsdr's

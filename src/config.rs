@@ -114,15 +114,6 @@ impl Settings {
                 "must be in -488..=488 for the signed 14-bit correction register",
             ));
         }
-        // The high-rate resampler range requires bit 27 to remain clear. At
-        // positive ppm, the lower rate boundary moves with the crystal.
-        let crystal = crate::rtl2832u::corrected_crystal(self.correction_ppm);
-        if (crystal << 22) / u64::from(self.sample_rate_hz) >= 0x0800_0000 {
-            return Err(Error::invalid_config(
-                "sample_rate_hz",
-                "too low for this ppm correction; increase the sample rate",
-            ));
-        }
         Ok(())
     }
 }
@@ -267,21 +258,23 @@ mod tests {
         }
     }
     #[test]
-    fn ppm_cannot_move_resampler_into_the_low_rate_encoding() {
-        assert!(Config::builder().sample_rate_hz(900_001).build().is_ok());
-        assert!(
-            Config::builder()
-                .sample_rate_hz(900_001)
-                .correction_ppm(488)
-                .build()
-                .is_err()
-        );
-        assert!(
-            Config::builder()
-                .sample_rate_hz(900_440)
-                .correction_ppm(488)
-                .build()
-                .is_ok()
-        );
+    fn sample_rate_limits_are_independent_of_ppm() {
+        for ppm in [-488, -100, 0, 100, 488] {
+            for (rate, accepted) in [
+                (900_000, false),
+                (900_001, true),
+                (3_200_000, true),
+                (3_200_001, false),
+            ] {
+                assert_eq!(
+                    Config::builder()
+                        .sample_rate_hz(rate)
+                        .correction_ppm(ppm)
+                        .build()
+                        .is_ok(),
+                    accepted
+                );
+            }
+        }
     }
 }

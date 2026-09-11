@@ -110,7 +110,7 @@ impl<M: SampleMode> Device<M> {
         config.settings.gain = gain;
         self.update(config)
     }
-    /// Reapply sample-rate and tuning dividers with a corrected crystal frequency.
+    /// Correct the sampling clock and reapply tuning with the corrected crystal frequency.
     pub fn set_correction_ppm(&mut self, ppm: i32) -> impl MaybeFuture<Output = Result<()>> + '_ {
         let mut config = self.config.clone();
         config.settings.correction_ppm = ppm;

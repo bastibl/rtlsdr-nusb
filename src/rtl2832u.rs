@@ -178,11 +178,12 @@ impl Hardware {
             tuner.set_gain(com, config.gain).await?;
         }
         self.direct = direct;
-        // Both sample-rate and tuner dividers use the same corrected crystal.
+        // Sampling correction is applied by these registers, so the resampler
+        // divider below must continue to use the nominal crystal frequency.
         let ppm = correction_word(config.correction_ppm);
         com.demod(1, 0x3e, (ppm >> 8) & 0x3f, 1).await?;
         com.demod(1, 0x3f, ppm & 0xff, 1).await?;
-        let (ratio, sample_rate_hz) = sample_rate(config.sample_rate_hz, crystal);
+        let (ratio, sample_rate_hz) = sample_rate(config.sample_rate_hz);
         com.demod(1, 0x9f, (ratio >> 16) as u16, 2).await?;
         com.demod(1, 0xa1, ratio as u16, 2).await?;
         // Tuner accesses precede closing/resetting the repeater.
@@ -238,9 +239,9 @@ pub(crate) fn corrected_crystal(ppm: i32) -> u64 {
 pub(crate) fn correction_word(ppm: i32) -> u16 {
     (-((i64::from(ppm) * (1 << 24)).div_euclid(1_000_000)) & 0x3fff) as u16
 }
-pub(crate) fn sample_rate(rate: u32, crystal: u64) -> (u32, u32) {
-    let ratio = ((crystal << 22) / u64::from(rate)) as u32 & 0x0ffffffc;
-    (ratio, ((crystal << 22) / u64::from(ratio)) as u32)
+pub(crate) fn sample_rate(rate: u32) -> (u32, u32) {
+    let ratio = ((XTAL_HZ << 22) / u64::from(rate)) as u32 & 0x0ffffffc;
+    (ratio, ((XTAL_HZ << 22) / u64::from(ratio)) as u32)
 }
 fn if_word(hz: u64, crystal: u64) -> u32 {
     (-(((hz << 22) / crystal) as i64) & 0x3fffff) as u32
@@ -250,6 +251,49 @@ fn if_word(hz: u64, crystal: u64) -> u32 {
 mod tests {
     use super::*;
     use crate::test_support::FakeTransport;
+    #[test]
+    fn ppm_changes_correction_registers_without_changing_resampler_divider() {
+        let control = FakeTransport::default();
+        let descriptor = DeviceDescriptor {
+            index: 0,
+            vid: 0x0bda,
+            pid: 0x2838,
+            serial: None,
+            manufacturer: None,
+            product: None,
+        };
+        let mut hardware = Hardware::default();
+        for ppm in [-488, -100, 0, 100, 488] {
+            control.state.control_out_requests.lock().unwrap().clear();
+            let config = Settings {
+                correction_ppm: ppm,
+                ..Settings::default()
+            };
+            let applied =
+                futures_lite::future::block_on(hardware.configure(&control, &config, &descriptor))
+                    .unwrap();
+            assert_eq!(applied.sample_rate_hz, 2_048_000);
+            assert_eq!(
+                hardware.tuner.as_ref().unwrap().crystal_hz,
+                corrected_crystal(ppm)
+            );
+            let writes = control.state.control_out_requests.lock().unwrap();
+            let register = |reg: u8| {
+                writes
+                    .iter()
+                    .rev()
+                    .find(|r| r.index == 0x11 && r.value == (u16::from(reg) << 8 | 0x20))
+                    .unwrap()
+                    .data
+                    .as_slice()
+            };
+            // Osmocom's nominal 28.8 MHz / 2.048 MS/s divider is 0x03840000.
+            assert_eq!(register(0x9f), [0x03, 0x84]);
+            assert_eq!(register(0xa1), [0x00, 0x00]);
+            let correction = (u16::from(register(0x3e)[0]) << 8) | u16::from(register(0x3f)[0]);
+            assert_eq!(correction, correction_word(ppm));
+        }
+    }
     #[test]
     fn power_clock_precedes_demod_access_and_configuration_closes_i2c_gate() {
         let control = FakeTransport::default();
@@ -291,7 +335,7 @@ mod tests {
             let signed = ((word << 2) as i16) >> 2;
             assert!((i64::from(signed) * 1_000_000 + i64::from(ppm) * (1 << 24)).abs() < 1_000_000);
             for rate in [900_001, 1_024_000, 2_048_000, 2_400_000, 3_200_000] {
-                let (ratio, actual) = sample_rate(rate, corrected_crystal(ppm));
+                let (ratio, actual) = sample_rate(rate);
                 assert_eq!(ratio & 3, 0);
                 assert!(actual >= rate && actual - rate < 2);
             }

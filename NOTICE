@@ -1,0 +1,16 @@
+rtlsdr-nusb
+
+The RTL2832U and R820T/R828D protocol implementation is adapted from
+webrtlsdr (https://github.com/jtarrio/webrtlsdr), under Apache License 2.0.
+Upstream notices retained here:
+
+Copyright 2024 Jacobo Tarrio Barreiro. All rights reserved.
+Copyright 2013 Google Inc. All rights reserved.
+
+The device/session, receive-stream lifecycle, MaybeFuture helpers, USB
+abstractions and portions of the test transport are adapted from
+hydrasdr-rs (https://github.com/bastibl/hydrasdr-rs), under its Apache-2.0
+license option.
+
+The Rust adaptation and its modifications are described in docs/PROVENANCE.md.
+The full Apache License 2.0 is provided in LICENSE-APACHE.

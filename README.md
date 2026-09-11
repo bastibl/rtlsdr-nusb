@@ -67,7 +67,7 @@ The blocking API needs neither feature nor a runtime.
 
 ```toml
 [dependencies]
-rtlsdr-nusb = { version = "0.2", features = ["smol"] }
+rtlsdr-nusb = { version = "0.3", features = ["smol"] }
 futures-lite = "2"
 ```
 

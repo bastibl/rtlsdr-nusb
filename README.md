@@ -171,11 +171,9 @@ CI checks formatting, Clippy, tests/docs with default/smol/tokio/all features,
 Rust 1.88, WebUSB compilation and the distributable crate. A pushed `v<version>`
 tag runs the same checks, verifies the Cargo version, publishes to crates.io
 through trusted publishing, then creates a GitHub release containing the crate
-archive. See [release setup](docs/RELEASING.md) for the registry configuration
-needed before the first automated release.
+archive.
 
 ## Acknowledgment and license
 
 Based on [webrtlsdr](https://github.com/jtarrio/webrtlsdr). Distributed under
-[Apache-2.0](LICENSE-APACHE); upstream attribution is retained in [NOTICE](NOTICE),
-with pinned references and adaptation details in [PROVENANCE](docs/PROVENANCE.md).
+[Apache-2.0](LICENSE).

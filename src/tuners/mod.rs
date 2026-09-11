@@ -141,6 +141,12 @@ impl Tuner {
             } else {
                 u8::from(hz <= 345_000_000)
             };
+            // The HF upconverter path does not benefit from the tracking filter.
+            // Reapply the bypass on every tune because the mux resets it above.
+            if self.blog_v4 && input == 2 {
+                self.write_many(com, &[(0x1a, 0x40, 0xc3), (0x1b, 0, 0xff)])
+                    .await?;
+            }
             if self.input != Some(input) {
                 if self.blog_v4 {
                     self.write(com, 0x06, if input == 2 { 8 } else { 0 }, 8)
@@ -302,6 +308,27 @@ mod tests {
     use super::*;
     use crate::test_support::FakeTransport;
     use std::sync::atomic::Ordering;
+    #[test]
+    fn v4_hf_bypasses_tracking_filter_on_retunes_and_restores_it_above_hf() {
+        let control = FakeTransport::default();
+        control.state.tuner_address.store(0x74, Ordering::SeqCst);
+        let mut tuner = Tuner::new(TunerKind::R828D, true);
+        for (hz, filter, corner) in [
+            (7_100_000, 0x40, 0),
+            (14_200_000, 0x40, 0),
+            (28_799_999, 0x40, 0),
+            (28_800_000, 0x02, 0xdf),
+            (100_000_000, 0x02, 0x34),
+            (433_920_000, 0x41, 0),
+            (7_100_000, 0x40, 0),
+        ] {
+            futures_lite::future::block_on(tuner.tune(&Com(&control), hz)).unwrap();
+            assert_eq!(tuner.shadow[0x1a - 5] & 0xc3, filter, "RF frequency {hz}");
+            assert_eq!(tuner.shadow[0x1b - 5], corner, "RF frequency {hz}");
+            // Preserve the PLL autotune bits while selecting the RF mux.
+            assert_eq!(tuner.shadow[0x1a - 5] & 0x0c, 8);
+        }
+    }
     #[test]
     fn v4_notches_follow_rf_at_every_band_edge_and_retune() {
         let control = FakeTransport::default();

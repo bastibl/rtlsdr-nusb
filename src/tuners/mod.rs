@@ -167,7 +167,8 @@ impl Tuner {
                 .await?;
             let code = self.read(com, 5).await?[4] & 15;
             let code = if code == 15 { 0 } else { code };
-            if code == 0 || attempt == 1 {
+            // Codes 0 and 15 are invalid; keep the first valid calibration.
+            if code != 0 || attempt == 1 {
                 return Ok(code);
             }
         }
@@ -293,6 +294,43 @@ mod tests {
     use super::*;
     use crate::test_support::FakeTransport;
     use std::sync::atomic::Ordering;
+    fn calibration_responses(codes: &[u8]) -> FakeTransport {
+        let control = FakeTransport::default();
+        for code in codes {
+            control.state.responses.lock().unwrap().extend([
+                Ok(vec![0, 0, 0, 0, 0x20u8.reverse_bits()]),
+                Ok(vec![0, 0, 0x40u8.reverse_bits()]),
+                Ok(vec![0, 0, 0, 0, code.reverse_bits()]),
+            ]);
+        }
+        control
+    }
+    #[test]
+    fn calibration_keeps_first_valid_result() {
+        for code in 1..15 {
+            let control = calibration_responses(&[code, 0]);
+            let mut tuner = Tuner::new(TunerKind::R820T, false);
+            assert_eq!(
+                futures_lite::future::block_on(tuner.calibrate(&Com(&control))).unwrap(),
+                code
+            );
+            assert_eq!(control.state.responses.lock().unwrap().len(), 3);
+        }
+    }
+    #[test]
+    fn calibration_retries_invalid_codes_once() {
+        for invalid in [0, 15] {
+            for second in [0, 7, 15] {
+                let control = calibration_responses(&[invalid, second]);
+                let mut tuner = Tuner::new(TunerKind::R820T, false);
+                assert_eq!(
+                    futures_lite::future::block_on(tuner.calibrate(&Com(&control))).unwrap(),
+                    if second == 15 { 0 } else { second }
+                );
+                assert!(control.state.responses.lock().unwrap().is_empty());
+            }
+        }
+    }
     #[test]
     fn r828d_probe_is_awaited_and_missing_tuners_are_rejected() {
         let control = FakeTransport::default();

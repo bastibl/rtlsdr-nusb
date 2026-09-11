@@ -108,12 +108,20 @@ impl Tuner {
             0
         };
         let lo = hz + upconvert + IF_HZ;
-        let table = if self.blog_v4 { V4_MUX } else { STANDARD_MUX };
-        let &(_, drain, filter, corner) = table
+        let &(_, drain, filter, corner) = STANDARD_MUX
             .iter()
             .rev()
             .find(|row| row.0 <= lo)
             .expect("table starts at zero");
+        // V4 notch filters follow antenna RF, not the LO used by the mux.
+        let drain = if self.blog_v4 {
+            match hz {
+                0..=2_200_000 | 85_000_000..=112_000_000 | 172_000_000..=242_000_000 => 0,
+                _ => 8,
+            }
+        } else {
+            drain
+        };
         self.write_many(
             com,
             &[
@@ -294,6 +302,54 @@ mod tests {
     use super::*;
     use crate::test_support::FakeTransport;
     use std::sync::atomic::Ordering;
+    #[test]
+    fn v4_notches_follow_rf_at_every_band_edge_and_retune() {
+        let control = FakeTransport::default();
+        control.state.tuner_address.store(0x74, Ordering::SeqCst);
+        let mut tuner = Tuner::new(TunerKind::R828D, true);
+        for (hz, notch) in [
+            (1_000_000, 0),
+            (2_200_000, 0),
+            (2_200_001, 8),
+            (83_000_000, 8),
+            (84_999_999, 8),
+            (85_000_000, 0),
+            (110_000_000, 0),
+            (112_000_000, 0),
+            (112_000_001, 8),
+            (170_000_000, 8),
+            (171_999_999, 8),
+            (172_000_000, 0),
+            (240_000_000, 0),
+            (242_000_000, 0),
+            (242_000_001, 8),
+            (100_000_000, 0),
+            (83_000_000, 8),
+            (1_000_000, 0),
+        ] {
+            futures_lite::future::block_on(tuner.tune(&Com(&control), hz)).unwrap();
+            let writes = control.state.control_out_requests.lock().unwrap();
+            let value = writes
+                .iter()
+                .rev()
+                .find(|r| r.index == 0x610 && r.data.first() == Some(&0x17))
+                .unwrap()
+                .data[1];
+            assert_eq!(value & 8, notch, "RF frequency {hz}");
+        }
+    }
+    #[test]
+    fn standard_tuner_open_drain_still_follows_mux() {
+        for (kind, address) in [(TunerKind::R820T, 0x34), (TunerKind::R828D, 0x74)] {
+            let control = FakeTransport::default();
+            control.state.tuner_address.store(address, Ordering::SeqCst);
+            let mut tuner = Tuner::new(kind, false);
+            for (hz, drain) in [(50_000_000, 8), (83_000_000, 0)] {
+                futures_lite::future::block_on(tuner.tune(&Com(&control), hz)).unwrap();
+                assert_eq!(tuner.shadow[0x17 - 5] & 8, drain);
+            }
+        }
+    }
     fn calibration_responses(codes: &[u8]) -> FakeTransport {
         let control = FakeTransport::default();
         for code in codes {

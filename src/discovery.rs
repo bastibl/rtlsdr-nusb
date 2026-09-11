@@ -1,8 +1,10 @@
-//! Device enumeration and selection without opening hardware.
+//! Device enumeration, selection, and USB identity completion.
+use crate::maybe_future::{Either, MaybeFutureExt, NonWasmSend, ready};
 use crate::{Error, Result};
 use nusb::MaybeFuture;
+use std::num::NonZeroU8;
 
-/// USB identity collected during enumeration.
+/// USB identity collected during enumeration and completed during open.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceDescriptor {
     /// Index among currently visible devices with the selected USB IDs.
@@ -32,6 +34,34 @@ impl DeviceDescriptor {
     pub(crate) fn blog_v4(&self) -> bool {
         self.manufacturer.as_deref() == Some("RTLSDRBlog")
             && self.product.as_deref() == Some("Blog V4")
+    }
+    pub(crate) fn read_missing_strings<F, M>(
+        mut self,
+        manufacturer_index: Option<NonZeroU8>,
+        product_index: Option<NonZeroU8>,
+        mut read: F,
+    ) -> impl MaybeFuture<Output = Self>
+    where
+        F: FnMut(NonZeroU8) -> M + NonWasmSend,
+        M: MaybeFuture<Output = Option<String>>,
+    {
+        ready(()).continue_with(move |()| {
+            let manufacturer = match manufacturer_index.filter(|_| self.manufacturer.is_none()) {
+                Some(index) => Either::left(read(index)),
+                None => Either::right(ready(None)),
+            };
+            manufacturer.continue_with(move |value| {
+                self.manufacturer = self.manufacturer.or(value);
+                let product = match product_index.filter(|_| self.product.is_none()) {
+                    Some(index) => Either::left(read(index)),
+                    None => Either::right(ready(None)),
+                };
+                product.map(move |value| {
+                    self.product = self.product.or(value);
+                    self
+                })
+            })
+        })
     }
 }
 
@@ -96,4 +126,86 @@ pub(crate) async fn request_permission(selector: &Selector) -> Result<()> {
         .await?
         .ok_or(Error::DeviceNotFound)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        future::IntoFuture,
+        sync::{Arc, Mutex},
+    };
+
+    fn descriptor(manufacturer: Option<&str>, product: Option<&str>) -> DeviceDescriptor {
+        DeviceDescriptor {
+            index: 0,
+            vid: 0x0bda,
+            pid: 0x2838,
+            serial: Some("00000001".into()),
+            manufacturer: manufacturer.map(str::to_owned),
+            product: product.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn missing_windows_manufacturer_is_read_lazily_and_enables_v4() {
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let observed = reads.clone();
+        let operation = descriptor(None, Some("Blog V4")).read_missing_strings(
+            NonZeroU8::new(1),
+            NonZeroU8::new(2),
+            move |index| {
+                observed.lock().unwrap().push(index.get());
+                ready(Some("RTLSDRBlog".into()))
+            },
+        );
+        assert!(reads.lock().unwrap().is_empty());
+        let result = operation.wait();
+        assert!(result.blog_v4());
+        assert_eq!(result.serial.as_deref(), Some("00000001"));
+        assert_eq!(*reads.lock().unwrap(), [1]);
+    }
+
+    #[test]
+    fn async_open_recovers_both_branding_strings() {
+        let result = futures_lite::future::block_on(
+            descriptor(None, None)
+                .read_missing_strings(NonZeroU8::new(1), NonZeroU8::new(2), |index| {
+                    ready(Some(
+                        match index.get() {
+                            1 => "RTLSDRBlog",
+                            2 => "Blog V4",
+                            _ => unreachable!(),
+                        }
+                        .into(),
+                    ))
+                })
+                .into_future(),
+        );
+        assert!(result.blog_v4());
+    }
+
+    #[test]
+    fn cached_absent_and_unreadable_strings_do_not_fabricate_v4_branding() {
+        let cached = descriptor(Some("Other"), Some("Blog V4"));
+        let mut reads = 0;
+        let result = cached
+            .clone()
+            .read_missing_strings(NonZeroU8::new(1), NonZeroU8::new(2), |_| {
+                reads += 1;
+                ready(None)
+            })
+            .wait();
+        assert_eq!(result, cached);
+        assert_eq!(reads, 0);
+        let result = descriptor(None, None)
+            .read_missing_strings(None, NonZeroU8::new(2), |index| {
+                assert_eq!(index.get(), 2);
+                ready(None)
+            })
+            .wait();
+        assert!(!result.blog_v4());
+        assert_eq!(result.manufacturer, None);
+        assert_eq!(result.product, None);
+    }
 }

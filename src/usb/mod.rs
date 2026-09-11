@@ -106,6 +106,40 @@ impl NusbTransport {
                         )
                     })
             })
+            .and_then(|(transport, descriptor)| {
+                // Windows enumeration never includes iManufacturer. Read missing
+                // branding after claim, before selecting any V4 hardware behavior.
+                let strings = transport._device.device_descriptor();
+                let missing = (descriptor.manufacturer.is_none()
+                    && strings.manufacturer_string_index().is_some())
+                    || (descriptor.product.is_none() && strings.product_string_index().is_some());
+                let language = if missing {
+                    let device = transport._device.clone();
+                    Either::left(
+                        defer(move || {
+                            device.get_string_descriptor_supported_languages(protocol::timeout())
+                        })
+                        .map(|result| result.ok().and_then(|mut languages| languages.next())),
+                    )
+                } else {
+                    Either::right(ready(None))
+                };
+                language.continue_with(move |language| {
+                    let language = language.unwrap_or(nusb::descriptors::language_id::US_ENGLISH);
+                    let device = transport._device.clone();
+                    descriptor
+                        .read_missing_strings(
+                            strings.manufacturer_string_index(),
+                            strings.product_string_index(),
+                            move |index| {
+                                device
+                                    .get_string_descriptor(index, language, protocol::timeout())
+                                    .map(|r| r.ok())
+                            },
+                        )
+                        .map(move |descriptor| Ok((transport, descriptor)))
+                })
+            })
     }
 }
 
